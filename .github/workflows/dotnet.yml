@@ -13,9 +13,13 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+      # macos-11.0 -> BigSur 
+      # macos-latest -> Catalina
+        os: [ macos-latest, macos-11.0, ubuntu-latest, windows-latest  ]
+    runs-on: ${{ matrix.os }}
     name: Build and test
-
     steps:
       - uses: actions/checkout@v2
           
