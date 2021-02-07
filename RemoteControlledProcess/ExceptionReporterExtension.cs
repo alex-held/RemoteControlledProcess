@@ -9,21 +9,36 @@ namespace RemoteControlledProcess
     {
         public static void Write(this Exception exception, TextWriter writer)
         {
-            var stackFrame = new StackTrace(true).GetFrame(1);
-            var fileName = stackFrame?.GetFileName();
-            var lineNumber = stackFrame?.GetFileLineNumber();
+            try
+            {
+                var stackFrame = new StackTrace(true).GetFrame(1);
+                var fileName = stackFrame?.GetFileName();
+                var lineNumber = stackFrame?.GetFileLineNumber();
 
-            writer.WriteLine($"Unhandled exception in {fileName}:{lineNumber}");
-            writer.WriteLine(exception.ToString());
+                writer.WriteLine($"Unhandled exception in {fileName}:{lineNumber}");
+                writer.WriteLine(exception.ToString());
+            }
+            catch
+            {
+                // ignore, since this logging failed and we do not want to crash the test-host 
+            }
+     
         }
 
         public static void Log(this Exception exception, ILogger logger)
         {
-            var stackFrame = new StackTrace(true).GetFrame(1);
-            var fileName = stackFrame?.GetFileName();
-            var lineNumber = stackFrame?.GetFileLineNumber();
+            try
+            {
+                var stackFrame = new StackTrace(true).GetFrame(1);
+                var fileName = stackFrame?.GetFileName();
+                var lineNumber = stackFrame?.GetFileLineNumber();
 
-            logger.LogCritical(exception, "Unhandled exception in {FileName}:{@LineNumber}", fileName, lineNumber);
+                logger.LogCritical(exception, "Unhandled exception in {FileName}:{@LineNumber}", fileName, lineNumber);
+            }
+            catch
+            {
+                // ignore, since this logging failed and we do not want to crash the test-host 
+            }
         }
     }
 }
