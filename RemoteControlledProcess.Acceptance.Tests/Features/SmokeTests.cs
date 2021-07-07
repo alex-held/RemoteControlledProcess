@@ -1,7 +1,6 @@
-using RemoteControlledProcess;
 using Xunit;
 
-namespace katarabbitmq.bdd.tests.Features
+namespace RemoteControlledProcess.Acceptance.Tests.Features
 {
     public class SmokeTests
     {
@@ -15,7 +14,7 @@ namespace katarabbitmq.bdd.tests.Features
         [Fact]
         public void SmokeTest()
         {
-            var processWrapper = new ProcessWrapper("RemoteControlledProcess.Application", false);
+            var processWrapper = new TestProcessWrapper("RemoteControlledProcess.Application", false);
             processWrapper.Start();
             processWrapper.ShutdownGracefully();
             processWrapper.ForceTermination();
