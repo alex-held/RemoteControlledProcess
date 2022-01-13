@@ -13,9 +13,11 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ macos-latest, ubuntu-latest, windows-latest  ]
+    runs-on: ${{ matrix.os }}
     name: Build and test
-
     steps:
       - uses: actions/checkout@v2
           
