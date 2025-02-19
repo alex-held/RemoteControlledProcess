@@ -1,15 +1,17 @@
 name: .NET
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
-    
+    branches: [main]
+
 env:
-  packageVersionPrefix: ${{ '2.1.' }}
+  RETENTION_DAYS: 5
+  packageVersionPrefix: ${{ '6.3.' }}
   packageVersionSuffixForFeatureBranch: ${{ '-alpha' }}
-  packageVersionSuffixForMainBranch: ${{ '' }}
+  packageVersionSuffixForMainBranch: ${{ '-alpha' }}
 
 jobs:
   build-and-test:
@@ -17,7 +19,7 @@ jobs:
     name: Build and test
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
           
       - name: Setup environment variables (main branch)
         if: github.ref == 'refs/heads/main'
@@ -28,77 +30,130 @@ jobs:
         run: echo "packageVersion=${{ env.packageVersionPrefix }}${{ github.run_number }}${{ env.packageVersionSuffixForFeatureBranch }}" >> $GITHUB_ENV
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v1
+        uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 5.0.302
+          dotnet-version: 8.x
 
       - name: Install dotnet global tools (coverlet, reportgenerator)
         run: |
           dotnet tool install --global coverlet.console
           dotnet tool install --global dotnet-reportgenerator-globaltool
+          dotnet tool install --global SpecFlow.Plus.LivingDoc.CLI
 
       - name: Install dependencies
         run: dotnet restore
 
       - name: Build
-        run: dotnet build --configuration Debug --no-restore
+        run: |
+          dotnet build --configuration Debug --no-restore
+          dotnet build --configuration Release --no-restore TestProcessWrapper.LongLived.Application/TestProcessWrapper.LongLived.Application.csproj
 
       - name: Test with coverage
         run: dotnet test --no-restore --verbosity normal /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput='./TestResults/coverage.cobertura.xml'
 
       - name: Build NuGet package
         run: |
-          dotnet pack RemoteControlledProcess/RemoteControlledProcess.csproj /p:PackageVersion=${{ env.packageVersion }}
-          echo "packageVersion=${{ env.packageVersion }}" > RemoteControlledProcess/bin/Debug/VERSION.txt
-
-      - name: Test NuGet package
-        run: ./smoketest.sh
-        working-directory: RemoteControlledProcess.Nupkg.Tests
+          dotnet pack --configuration Debug TestProcessWrapper/TestProcessWrapper.csproj /p:PackageVersion=${{ env.packageVersion }}
+          echo "packageVersion=${{ env.packageVersion }}" > TestProcessWrapper/bin/Debug/VERSION.txt
         
       - name: Generate coverage reports
-        run: reportgenerator "-reports:RemoteControlledProcess.Acceptance.Tests/TestResults/*.xml;RemoteControlledProcess.Unit.Tests/TestResults/*.xml" \
+        run: reportgenerator "-reports:TestProcessWrapper.Acceptance.Tests/TestResults/*.xml;TestProcessWrapper.Unit.Tests/TestResults/*.xml" \
           "-targetdir:report" \
           "-reporttypes:Html;lcov" \
-          "-title:RemoteControlledProcess"
+          "-title:TestProcessWrapper"
+        
+      - name: Generate SpecFlow LivingDoc
+        run: livingdoc test-assembly TestProcessWrapper.Acceptance.Tests.dll -t TestExecution.json
+        working-directory: TestProcessWrapper.Acceptance.Tests/bin/Debug/net8.0
 
       - name: Attach NuGet package to build artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: nuget-package
           path: |
-            RemoteControlledProcess/bin/Debug/Boos.RemoteControlledProcess.${{ env.packageVersion }}.nupkg
-            RemoteControlledProcess/bin/Debug/VERSION.txt
+            TestProcessWrapper/bin/Debug/Boos.TestProcessWrapper.${{ env.packageVersion }}.nupkg
+            TestProcessWrapper/bin/Debug/VERSION.txt
 
       - name: Attach coverage reports to build artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-reports
           path: report
 
+      - name: Attach LivingDoc to build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LivingDoc
+          path: TestProcessWrapper.Acceptance.Tests/bin/Debug/net8.0/LivingDoc.html
+
+  smoketest:
+    name: Test NuGet package
+
+    needs: build-and-test
+    
+    strategy:
+      matrix:
+        os: [ macos-latest, windows-latest, ubuntu-latest ]
+        dotnet:
+          - { setupVersion: 6.x, binFolder: net6.0 }
+          - { setupVersion: 7.x, binFolder: net7.0 }
+          - { setupVersion: 8.x, binFolder: net8.0 }
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup environment variables (main branch)
+        if: github.ref == 'refs/heads/main'
+        run: echo "packageVersion=${{ env.packageVersionPrefix }}${{ github.run_number }}${{ env.packageVersionSuffixForMainBranch }}" >> $GITHUB_ENV
+
+      - name: Setup environment variables (feature branch)
+        if: github.ref != 'refs/heads/main'
+        run: echo "packageVersion=${{ env.packageVersionPrefix }}${{ github.run_number }}${{ env.packageVersionSuffixForFeatureBranch }}" >> $GITHUB_ENV
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet.setupVersion }}
+
+      - name: Download nuget package
+        uses: actions/download-artifact@v4
+        with:
+          name: nuget-package
+          path: ./TestProcessWrapper/bin/Debug
+          # Downloading the nuget package to this path allows to run the ./smoketest.sh script on your
+          # local development machine without changes
+
+      - name: Test NuGet package
+        run: ./smoketest.sh "${{ matrix.dotnet.binFolder }}"
+        working-directory: TestProcessWrapper.Nupkg.Tests
+  
   publish-reports:
     runs-on: ubuntu-latest
     name: Publish coverage reports
+    if: github.ref == 'refs/heads/main'
     
-    needs: build-and-test
+    needs: smoketest
     
     steps:
       # the repository is required by codeclimate-action
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Download coverage reports
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: coverage-reports
           path: coverage-reports
           
       - name: Publish coverage report to coveralls.io
-        uses: coverallsapp/github-action@master
+        uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: coverage-reports/lcov.info
 
       - name: Publish coverage report to CodeClimate
-        uses: paambaati/codeclimate-action@v2.7.5
+        uses: paambaati/codeclimate-action@v8.0.0
         env:
           CC_TEST_REPORTER_ID: ${{ secrets.CC_TEST_REPORTER_ID }}
         with:
@@ -108,11 +163,11 @@ jobs:
     runs-on: ubuntu-latest
     name: Publish NuGet package
     
-    needs: publish-reports
+    needs: smoketest
 
     steps:
       - name: Download NuGet package
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: nuget-package
           path: nuget-package
@@ -121,5 +176,54 @@ jobs:
         run: cat nuget-package/VERSION.txt >> $GITHUB_ENV
 
       - name: Publish NuGet package
-        run: dotnet nuget push nuget-package/Boos.RemoteControlledProcess.${{ env.packageVersion }}.nupkg --api-key ${{ secrets.NUGET_API_ACESS_TOKEN }} --source https://api.nuget.org/v3/index.json
+        if: github.ref == 'refs/heads/main'
+        run: dotnet nuget push nuget-package/Boos.TestProcessWrapper.${{ env.packageVersion }}.nupkg --skip-duplicate --api-key ${{ secrets.NUGET_API_ACESS_TOKEN }} --source https://api.nuget.org/v3/index.json
   
+  release:
+    runs-on: ubuntu-latest
+    name: Release
+
+    needs: publish-nuget
+    
+    # Configure GITHUB_TOKEN so that it allows uploading to the release
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+
+      - name: Identify package version
+        run: cat nuget-package/VERSION.txt >> $GITHUB_ENV
+
+      - name: Create release folder
+        run: mkdir release
+
+      - name: Create release ZIP
+        run: |
+          mv -v nuget-package/*.nupkg ./release/  
+          mv -v coverage-reports ./release/
+          mv -v LivingDoc/LivingDoc.html ./release/features.html
+          mv -v release Boos.TestProcessWrapper.${{ env.packageVersion }}
+          zip -r9 Boos.TestProcessWrapper.${{ env.packageVersion }}.zip Boos.TestProcessWrapper.${{ env.packageVersion }}
+
+      # Adopted from https://github.com/svenstaro/upload-release-action
+      - name: Read CHANGELOG.md and use it as a body of new release
+        id: read_release
+        run: |
+          r=$(./build/extract_latest_changelog.sh)          # <--- Read CHANGELOG.md
+          r="${r//'%'/%25}"                                 # Multiline escape sequences for %
+          r="${r//$'\n'/%0A}"                               # Multiline escape sequences for '\n'
+          r="${r//$'\r'/%0D}"                               # Multiline escape sequences for '\r'
+          echo "RELEASE_BODY=$r" >> $GITHUB_OUTPUT          # <--- Set environment variable
+
+      - name: Upload applications to release
+        if: github.ref == 'refs/heads/main'
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: Boos.TestProcessWrapper.${{ env.packageVersion }}.zip
+          tag: ${{ env.packageVersion }}
+          overwrite: true
+          body: ${{ steps.read_release.outputs.RELEASE_BODY }}
